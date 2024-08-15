@@ -23,7 +23,8 @@ from model import acme
 
 
 class acme():
-    def __init__(self, max_iter=1000, tol=1e-8, learning_rate=0.01, reg=10, dim_reg=0, optimizer="grad", batch_size=32, epochs=100):
+    def __init__(self, max_iter=1000, tol=1e-8, learning_rate=0.01, reg=10, dim_reg=0, 
+                 optimizer="grad", batch_size=32, epochs=100, **kwargs):
         """Initialize the Adaptive Covariance Metric Estimator (ACME) model
         
         Parameters:
@@ -73,12 +74,15 @@ class acme():
         self.epochs = epochs
         self.reg = reg
         self.dim_reg = dim_reg
+        self.__dict__.update(kwargs)
 
         # Variables to store
         self.X = None
         self.y = None
         self.n = None
         self.d = None
+        self.min_iter = 5
+        self.save_frequency = 100
         self.weights = None
         self.classes = None
         self.num_classes = None
@@ -96,6 +100,7 @@ class acme():
         self.val_history = []
         self.train_history = []
         self.weights_history = []
+        self.can_validate = False
         
 
     ############################## Helper Functions ###############################
@@ -259,6 +264,7 @@ class acme():
         else:
             self.subset_differences = [X[batch][:,np.newaxis,:] - X[batch][np.newaxis,:,:] for batch in batches]
 
+
     
     def update_gaussian(self, weights:np.ndarray, subset_num=None):
         """
@@ -283,6 +289,7 @@ class acme():
         self.cur_tensor_prod = tensor_prod
 
 
+
     def gradient(self, W:np.ndarray, subset=None, subset_num=None):
         """
         Compute the gradient of the loss function
@@ -294,9 +301,47 @@ class acme():
         Returns:
             dW (d,d) ndarray - The gradient of the loss function
         """
+
+        """
+        CHAT GPT optimization, most notably the tensor_prod and class_index replacing y_index
         # Initialize the gradient
         self.update_gaussian(W, subset_num)
-        dW = np.zeros((self.d,self.d))
+        dW = np.zeros((self.d, self.d))
+
+        # Use subset-specific differences or all differences
+        differences = self.differences if subset is None else self.subset_differences[subset_num]
+        one_hot = self.one_hot if subset is None else self._get_one_hot(subset)
+
+        # Calculate gradient for each class
+        for i, class_index in enumerate(self.classes):
+            g_c = self.cur_gaussian[class_index]
+            product_c = self.cur_tensor_prod[class_index]
+            differences_c = differences[class_index]
+
+            # Calculate weighted sum for the class
+            weighted_product_c = g_c[:, :, np.newaxis] * product_c
+            weighted_sum_c = np.sum(np.einsum('ijk,ijl->ijkl', weighted_product_c, differences_c), axis=0)
+            weighted_sum_c /= np.sum(g_c, axis=0)[:, np.newaxis, np.newaxis] + 1e-20
+
+            # Update gradient
+            dW += np.sum(one_hot[:, i][:, np.newaxis, np.newaxis] * weighted_sum_c, axis=0)
+
+        # Calculate the gradient second term
+        g_all_totals = np.sum(self.cur_gaussian, axis=0)[:, np.newaxis, np.newaxis] + 1e-20
+        weighted_product_all = self.cur_gaussian[:, :, np.newaxis] * self.cur_tensor_prod
+        weighted_sum_all = np.sum(np.einsum('ijk,ijl->ijkl', weighted_product_all, differences), axis=0)
+        weighted_sum_all /= g_all_totals
+
+        # Update gradient
+        dW -= np.sum(weighted_sum_all, axis=0)
+
+        # Regularize the gradient
+        reg_term = self.reg * (W / np.linalg.norm(W, 'fro') - self.dim_reg * np.eye(self.d) / self.d)
+        return 2 * dW + reg_term
+        """
+        # Initialize the gradient
+        self.update_gaussian(W, subset_num)
+        dW = np.zeros((self.d, self.d))
         differences = self.differences if subset is None else self.subset_differences[subset_num]
 
         # If there is no subset, let the differences be the self.differeces and the one hot be the self.one_hot
@@ -327,7 +372,7 @@ class acme():
 
             # Calculate the weighted products
             weighted_product_c = g_c[:,:,np.newaxis] * product_c
-            weighted_sum_c = np.sum(np.einsum('ijk,ijl->ijkl', weighted_product_c, differences_c), axis = 0)
+            weighted_sum_c = np.sum(np.einsum('ijk,ijl->ijkl', weighted_product_c, differences_c), axis=0)
             weighted_sum_c /= g_c_totals
 
             # Calculate the gradient first term
@@ -336,15 +381,16 @@ class acme():
         # Calculate the gradient first term
         g_all_totals = np.sum(self.cur_gaussian, axis=0)[:, np.newaxis, np.newaxis] + 1e-20
         weighted_product_all = self.cur_gaussian[:,:,np.newaxis] * self.cur_tensor_prod
-        weighted_sum_all = np.sum(np.einsum('ijk,ijl->ijkl', weighted_product_all, differences), axis = 0)
+        weighted_sum_all = np.sum(np.einsum('ijk,ijl->ijkl', weighted_product_all, differences), axis=0)
         weighted_sum_all /= g_all_totals
 
         # Calculate the gradient second term
         dW -= np.sum(weighted_sum_all, axis=0)
 
         # Return the regularized gradient
-        return 2*dW + self.reg*(W / np.linalg.norm(W, 'fro') - self.dim_reg*np.eye(self.d) /self.d)
+        return 2*dW + self.reg*(W / np.linalg.norm(W, 'fro') - self.dim_reg*np.eye(self.d) / self.d)
     
+
 
     def loss(self, W:np.ndarray, subset=None, subset_num=None):
         """
@@ -379,7 +425,9 @@ class acme():
         return np.sum(loss - total_g_log) + self.reg*(np.linalg.norm(W, 'fro') - self.dim_reg*np.trace(W) /self.d)
 
 
+
     ########################## Optimization and Training Functions ############################
+
     def gradient_descent(self):
         """
         Perform gradient descent on the model
@@ -388,42 +436,41 @@ class acme():
         Returns:
             None
         """
-        show_iter = max(self.max_iter,100) // 100
-        for i in range(self.max_iter):
+        # TODO: check optimization changes I made
+        iter_denom = 50
+        show_iter = max(self.max_iter // self.save_frequency, self.min_iter) 
+        break_tol = self.tol * self.n
+        iter_min = self.max_iter // iter_denom
+        progress = tqdm(range(self.max_iter), desc="Processing classes", dynamic_ncols=True)
+
+        for i in progress:
             # Get the gradient
             gradient = self.gradient(self.weights)
             self.weights -= self.learning_rate * gradient
-            self.weights_history.append(self.weights.copy())
 
             # If there is a validation set, check the validation error
-            if self.X_val_set is not None and self.y_val_set is not None:
-                
-                # Predict on the validation set and append the history
-                val_predictions = self.predict(self.X_val_set)
-                val_accuracy = accuracy_score(self.y_val_set, val_predictions)
-                self.val_history.append(val_accuracy)
-
-                # Predict on the training set and append the history
-                train_predictions = self.predict(self.X)
-                train_accuracy = accuracy_score(self.y, train_predictions)
-                self.train_history.append(train_accuracy)
-                
-                # Show the progress
-                if i % show_iter == 0:
-                    print(f"({i}) Val Accuracy: {np.round(val_accuracy,5)}.   Train Accuracy: {train_accuracy}")
+            if i % show_iter == 0:
+                self.weights_history.append(self.weights.copy())
+                if self.can_validate:
+                    # Predict on the validation set and append the history
+                    val_accuracy = accuracy_score(self.y_val_set, self.predict(self.X_val_set))
+                    self.val_history.append(val_accuracy)                    
+                    progress.set_description(f"Iter {i}: Val Accuracy: {np.round(val_accuracy, 5)}")
 
             # Check for convergence after a certain number of iterations
-            break_value = np.linalg.norm(gradient)
-            if break_value < self.tol*self.n and i > self.max_iter//50:
+            if i > iter_min and np.linalg.norm(gradient) < break_tol:
                 break
+        progress.close()
 
 
-    def stochastic_gradient_descent(self, re_randomize=True):
+
+    def stochastic_gradient_descent(self, re_randomize=False):
         """
         Perform stochastic gradient descent on the model
 
         Parameters:
             re_randomize (bool) - Whether to re-randomize the batches after each epoch
+                                    Should always be True but it doesn't work right now
         Returns:
             None
         """
@@ -434,51 +481,39 @@ class acme():
             raise ValueError("Batch size must be less than the number of points")
         
         # Initialize the loop, get the batches, and go through the epochs
-        batches = self.randomize_batches()
+        show_iter = max(self.epochs // self.save_frequency, self.min_iter) 
+        val_accuracy = 0
+
+        # NOTE: I removed the initial randomize and update differences
         loop = tqdm(total=self.epochs*len(batches), position=0)
-        self.update_differences(self.X, batches)
         for epoch in range(self.epochs):
 
             # reset the batches if re_randomize is true
-            if re_randomize and epoch > 0:
+            if re_randomize:
                 batches = self.randomize_batches()
                 self.update_differences(self.X, batches)
             
             # Loop through the different batches
-            loss_list = []
-            self.weights_history.append(self.weights.copy())
             for i, batch in enumerate(batches):
 
                 # Get the gradient, update weights, and append the loss
-                gradient = self.gradient(self.weights, subset = batch, subset_num = i)
+                gradient = self.gradient(self.weights, subset=batch, subset_num=i)
                 self.weights -= self.learning_rate * gradient
-                loss_list.append(self.loss(self.weights, subset = batch, subset_num = i))
+                curr_loss = self.loss(self.weights, subset=batch, subset_num=i)
 
                 # update our loop
-                loop.set_description('epoch:{}, loss:{:.4f}'.format(epoch,loss_list[-1]))
-                loop.update()
+                loop.set_description('epoch:{}, loss:{:.4f}, val acc:{:.4f}'.format(epoch, curr_loss, val_accuracy))
+                loop.update(1)
 
-            # If there is a validation set, check the validation error
-            if self.X_val_set is not None and self.y_val_set is not None:
-                
-                # Predict on the validation set and append the history
-                val_predictions = self.predict(self.X_val_set)
-                val_accuracy = accuracy_score(self.y_val_set, val_predictions)
-                self.val_history.append(val_accuracy)
-
-                # Predict on the training set and append the history
-                train_predictions = self.predict(self.X)
-                train_accuracy = accuracy_score(self.y, train_predictions)
-                self.train_history.append(train_accuracy)
-                
-                # Show the progress
-                # print(f"({epoch}) Val Accuracy: {np.round(val_accuracy,5)}.   Train Accuracy: {train_accuracy}")
-
-            # Append the history of the weights
-            self.weights_history.append(self.weights.copy())
-            
-        # Close the loop
+            if epoch % show_iter == 0:
+                # Append the history of the weights
+                self.weights_history.append(self.weights.copy())
+                # If there is a validation set, check the validation error
+                if self.can_validate:
+                    val_accuracy = accuracy_score(self.y_val_set, self.predict(self.X_val_set))
+                    self.val_history.append(val_accuracy)
         loop.close()
+
 
 
     def bfgs(self):
@@ -491,33 +526,34 @@ class acme():
             None
         """
         # Define iterations to show the progress and define the loss and gradient function in 1D
-        show_iter = max(self.max_iter, 100) // 100
+        show_iter = max(self.max_iter // self.save_frequency, self.min_iter) 
         loss_bfgs = lambda W: self.loss(W.reshape(self.d, self.d))
         gradient_bfgs = lambda W: self.gradient(W.reshape(self.d, self.d)).flatten()
+        self.bfgs_count = 0
+        self.bfgs_val_accuracy = 0
 
         # Define the callback function
         def callback(weights):
+            self.bfgs_count += 1
             self.weights = weights.reshape(self.d, self.d)
-            self.weights_history.append(self.weights.copy())
+            progress.update(1)
 
-            # If there is a validation set, check the validation error
-            if self.X_val_set is not None and self.y_val_set is not None:
-                val_predictions = self.predict(self.X_val_set)
-                val_accuracy = accuracy_score(self.y_val_set, val_predictions)
-                self.val_history.append(val_accuracy)
-                
-                # Predict on the validation set and append the history
-                train_predictions = self.predict(self.X)
-                train_accuracy = accuracy_score(self.y, train_predictions)
-                self.train_history.append(train_accuracy)
+            if self.bfgs_count % show_iter == 0:
+                self.weights_history.append(self.weights.copy())
 
-                # Show the progress
-                if len(self.weights_history) % show_iter == 0:
-                    print(f"({len(self.weights_history)}) Val Accuracy: {np.round(val_accuracy, 5)}.   Train Accuracy: {train_accuracy}")
-        
+                # If there is a validation set, check the validation error
+                if self.can_validate:
+                    self.bfgs_val_accuracy = accuracy_score(self.y_val_set, self.predict(self.X_val_set))
+                    self.val_history.append(self.bfgs_val_accuracy)
+                progress.set_description(f"Iter {self.bfgs_count}: Val Accuracy: {np.round(self.bfgs_val_accuracy, 5)}.")
+
         # Run the optimizer
-        res = minimize(loss_bfgs, self.weights.flatten(), jac=gradient_bfgs, method='BFGS', options={'disp': False, 'maxiter': self.max_iter, 'gtol':self.tol}, callback=callback)
+        progress = tqdm(total=self.max_iters, desc="BFGS Progress", dynamic_ncols=True)
+        res = minimize(loss_bfgs, self.weights.flatten(), jac=gradient_bfgs, method='BFGS', 
+                       options={'disp': False, 'maxiter': self.max_iter, 'gtol':self.tol}, 
+                       callback=callback)
         self.weights = res.x.reshape(self.d, self.d)
+
 
 
     def fit(self, X:np.ndarray, y:np.ndarray, X_val_set=None, y_val_set=None, init_weights=None):
@@ -571,7 +607,9 @@ class acme():
         return self.train_history, self.val_history
 
 
+
     ############################## Prediction Functions #############################
+
     def predict(self, points:np.ndarray, show_probabilities=False):
         """
         Predict the labels of the data
@@ -598,6 +636,7 @@ class acme():
         # Return the predictions
         return np.array(predictions)
     
+
 
     def score(self, X:np.ndarray=None, y:np.ndarray=None):
         """
@@ -675,10 +714,10 @@ class acme():
         Parameters:
             None
         Returns:
-            new_model (model3 class) - A copy of the model
+            acme (class object) - A copy of the model
         """
         # Initialize a new model
-        new_model = model3(max_iter=self.max_iter, tol=self.tol, learning_rate=self.learning_rate, 
+        new_model = acme(max_iter=self.max_iter, tol=self.tol, learning_rate=self.learning_rate, 
                            reg=self.reg, dim_reg=self.dim_reg, 
                            optimizer=self.optimizer, batch_size=self.batch_size, epochs=self.epochs)
         
@@ -705,6 +744,7 @@ class acme():
         # Return the new model
         return new_model
     
+
 
     def save_weights(self, file_path:str, save_type="standard"):
         """
@@ -767,6 +807,7 @@ class acme():
             raise ValueError(f"The file '{file_path}.pkl' could not be saved.")
     
 
+
     def load_weights(self, file_path):
         """
         Load the weights of the model from a file
@@ -816,3 +857,25 @@ class acme():
             print(e)
             raise ValueError(f"The file '{file_path}.pkl' could not be loaded")
         
+
+    
+    def __str__(self):
+        """
+        Get the string representation of the model
+
+        Parameters:
+            None
+        Returns:
+            string (str) - The string representation of the model
+        """
+        # TODO: Test this function
+        key_width = max(len(key) for key in self.__dict__.keys()) + 2
+
+        print("\n\nACME Model\n")
+        for key, value in self.__dict__.items():
+            if isinstance(value, np.ndarray):
+                print(f"{key:<{key_width}} shape: {value.shape}")
+            elif isinstance(value, list):
+                print(f"{key:<{key_width}} length: {len(value)}")
+            else:
+                print(f"{key:<{key_width}}: {value}")

@@ -2,7 +2,7 @@ import sys
 import os
 import time
 import datetime as dt
-import pandas as pd
+import itertools
 import numpy as np
 from tqdm import tqdm
 from jeffutils.utils import stack_trace
@@ -24,7 +24,7 @@ from sklearn.neighbors import KNeighborsClassifier
 
 # our model imports
 sys.path.append('../')
-from model import model3
+from model import acme
 
 
 
@@ -66,6 +66,7 @@ def get_last_file(dir:str, partial_name:str):
     return os.path.join(dir, f"{partial_name}_d{latest_datetime}.npy")
 
 
+
 def build_dir(dataset_name:str, model_name:str):
     """
     Build the directory to save the numpy files
@@ -76,6 +77,7 @@ def build_dir(dataset_name:str, model_name:str):
         str: directory
     """
     return f"results/{dataset_name}/{model_name}/npy_files"
+
 
 
 def build_name(val:bool, info_type:str, iteration):
@@ -90,6 +92,7 @@ def build_name(val:bool, info_type:str, iteration):
     """
     train = "train" if not val else "val"
     return f"{train}_{info_type}_i{iteration}"
+
 
 
 def load_data(dataset_name:str, model_name:str, info_type:str, iteration, val=False):
@@ -113,6 +116,7 @@ def load_data(dataset_name:str, model_name:str, info_type:str, iteration, val=Fa
         print(stack_trace(e))
         return None
     
+
 
 def save_data(data:np.ndarray, save_constants:tuple, info_type:str, iteration, 
               val=False, refresh=False):
@@ -153,10 +157,61 @@ def save_data(data:np.ndarray, save_constants:tuple, info_type:str, iteration,
 
 
 
+
 ### MODEL FUNCTIONS ###
 
-def benchmark_ml(model_name, experiment_info, datetime, 
-                save_all=True, save_any=True, refresh=True):
+
+def hyp_tun_acme(X_train:np.ndarray, y_train:np.ndarray, 
+                 X_val:np.ndarray, y_val:np.ndarray,
+                 params:dict=None):
+    """
+    Tune the hyperparameters of the acme model using a grid search
+
+    Parameters:
+        X_train (np.ndarray): training data
+        y_train (np.ndarray): training labels
+        X_val (np.ndarray): validation data
+        y_val (np.ndarray): validation labels
+        params (dict): hyperparameters to tune
+        param_grid (dict): hyperparameters to tune
+
+    Returns:
+        acme: model with the best hyperparameters
+        dict: best hyperparameters
+        float: average training time
+    """
+    try:
+        regs = [0.1, 1, 10] if params is None else params['reg']
+        dim_regs = [0.01, 0.1, 1] if params is None else params['dim_reg']
+        combos = list(itertools.product(regs, dim_regs))
+    except Exception as e:
+        raise ValueError("Invalid hyperparameters for acme model. Must be a dictionary with 'reg' and 'dim_reg' keys.")
+    
+    # find the best hyperparameters
+    best_params = {'reg': regs[0], 'dim_reg': dim_regs[0]}
+    best_acc = 0
+    best_model = None
+    train_times = []
+    for combo in combos:
+        clf = acme(param={'reg': combo[0], 'dim_reg': combo[1]})
+        start_time = time.perf_counter()
+        clf.fit(X_train, y_train)
+        end_time = time.perf_counter()
+        y_pred = clf.predict(X_val)
+        acc = accuracy_score(y_val, y_pred)
+        train_times.append(end_time - start_time)
+
+        # update best hyperparameters
+        if acc > best_acc:
+            best_acc = acc
+            best_params = params
+            best_model = clf.copy()
+    return best_model, best_params, np.mean(train_times)
+
+
+
+def benchmark_ml(model_name, experiment_info, datetime, params={},
+                save_all=True, save_any=True, refresh=True, tune_acme=True):
     """
     Trains a model on the cancer dataset with different data sizes and saves the accuracy and time data.
 
@@ -170,9 +225,11 @@ def benchmark_ml(model_name, experiment_info, datetime,
             X_test (np.ndarray): The testing data.
             y_test (np.ndarray): The testing labels.
         datetime (str): The current date and time.
+        params (dict): The hyperparameters to use for the acme model.
         save_all (bool): Whether to save all the data or just the means and stds
         save_any (bool): Whether to save any data at all
         refresh (bool): Whether to refresh the last file
+        tune_acme (bool): Whether to tune the hyperparameters of the acme model
 
     Returns:
     results_dict (dict): A dictionary containing the accuracy and time data for each model and iteration
@@ -183,7 +240,9 @@ def benchmark_ml(model_name, experiment_info, datetime,
     dataset_name, data_sizes, X_train, y_train, X_test, y_test = experiment_info
     model = RandomForestClassifier(n_jobs=-1) if model_name == "randomforest" else \
             KNeighborsClassifier(n_jobs=-1) if model_name == "knn" else \
-            model3() if model_name == "ours" else None
+            acme(param=params) if model_name == "acme" else None
+    if model is None:
+        raise ValueError("Invalid model name. Must be 'randomforest', 'knn', or 'acme'.")
     results_dict = {model_name: {}}
     save_constants = (dataset_name, model_name, datetime)
     
@@ -198,10 +257,15 @@ def benchmark_ml(model_name, experiment_info, datetime,
                 data_sizes[data_sizes.index(size)] = len(X_train)
                 size = len(X_train)
             # train model
-            clf = model
-            start_time = time.perf_counter()
-            clf.fit(X_train[:size], y_train[:size])
-            end_time = time.perf_counter()
+            if tune_acme:
+                clf, best_params, train_time = hyp_tun_acme(X_train[:size], y_train[:size], X_test, y_test)
+                model.set_params(**best_params)
+                tune_acme = False
+            else:
+                clf = model
+                start_time = time.perf_counter()
+                clf.fit(X_train[:size], y_train[:size])
+                train_time = start_time - time.perf_counter()
             y_pred = clf.predict(X_test)
 
             # predict and compute accuracy
@@ -211,7 +275,7 @@ def benchmark_ml(model_name, experiment_info, datetime,
             acc_test = accuracy_score(y_test, y_pred)
 
             # update lists
-            time_list.append(end_time - start_time)
+            time_list.append(train_time)
             train_acc.append(acc_train)
             val_acc.append(acc_test)
             progressB.update(1)
@@ -221,9 +285,10 @@ def benchmark_ml(model_name, experiment_info, datetime,
         val_acc = np.array(val_acc)
         time_list = np.array(time_list)
         if save_all:
-            save_data(train_acc, save_constants, "acc", i, refresh=refresh)
-            save_data(val_acc, save_constants, "acc", i, val=True, refresh=refresh)
-            save_data(time_list, save_constants, "time", i, refresh=refresh)
+            for i, data, info_type in zip(range(info_length), 
+                                          [train_acc, val_acc, time_list], 
+                                          ["acc", "acc", "time"]):
+                save_data(data, save_constants, info_type, val=i==1, refresh=refresh)
         results_dict[model_name][i] = {"train_acc": train_acc, "val_acc": val_acc, "time": time_list}
     progressB.close()
 
@@ -241,15 +306,15 @@ def benchmark_ml(model_name, experiment_info, datetime,
 
     # save means and stds
     if not save_any:
-        save_data(train_acc_mean, save_constants,  "acc", "mean", refresh=refresh)
-        save_data(val_acc_mean, save_constants, "acc", "mean", val=True, refresh=refresh)
-        save_data(time_mean, save_constants, "time", "mean", refresh=refresh)
-        save_data(train_acc_std, save_constants, "acc", "std", refresh=refresh)
-        save_data(val_acc_std, save_constants, "acc", "std", val=True, refresh=refresh)
-        save_data(time_std, save_constants, "time", "std", refresh=refresh)
+        data_list = [train_acc_mean, val_acc_mean, time_mean, train_acc_std, val_acc_std, time_std]
+        type_list = ["acc", "acc", "time"]*2
+        val_list = [False, True, False]*2
+        name_list = ["mean",]*3 + ["std",]*3
+        for data, info_type, name, val in zip(data_list, name_list, type_list, val_list):
+            save_data(data, save_constants, info_type, name, val=val, refresh=refresh)
+        
     results_dict[model_name]["mean"] = {"train_acc": train_acc_mean, "val_acc": val_acc_mean, "time": time_mean}
     results_dict[model_name]["std"] = {"train_acc": train_acc_std, "val_acc": val_acc_std, "time": time_std}
-    
     return results_dict
 
 
