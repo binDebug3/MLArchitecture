@@ -17,14 +17,14 @@ from matplotlib.animation import FuncAnimation
 """
 To import this class into an ipynb file in the same folder:
 
-from model import model3    
+from model import acme    
 """
 
 
 
-class model3():
+class acme():
     def __init__(self, max_iter=1000, tol=1e-8, learning_rate=0.01, reg=10, dim_reg=0, optimizer="grad", batch_size=32, epochs=100):
-        """Initialize the model
+        """Initialize the Adaptive Covariance Metric Estimator (ACME) model
         
         Parameters:
             max_iter (int) - The maximum number of iterations to perform in the gradient descent optimization
