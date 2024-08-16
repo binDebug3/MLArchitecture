@@ -24,7 +24,7 @@ from model import acme
 
 class acme():
     def __init__(self, max_iter=1000, tol=1e-8, learning_rate=0.01, reg=10, dim_reg=0, 
-                 optimizer="grad", batch_size=32, epochs=100, **kwargs):
+                 optimizer="grad", batch_size=32, epochs=100, random_state=None, **kwargs):
         """Initialize the Adaptive Covariance Metric Estimator (ACME) model
         
         Parameters:
@@ -39,6 +39,8 @@ class acme():
                             Options are 'grad' for gradient descent, 'sgd' for stochastic gradient descent, and 'bfgs' for BFGS
             batch_size (int) - The batch size for stochastic gradient descent
             epochs (int) - The number of epochs for stochastic gradient descent
+            random_state (int) - The random state for the model
+            **kwargs - Additional parameters for the model
 
         Attributes:
             X (n,d) ndarray - The data to fit the model on
@@ -74,6 +76,8 @@ class acme():
         self.epochs = epochs
         self.reg = reg
         self.dim_reg = dim_reg
+        self.random_state = random_state
+        np.random.seed(self.random_state)
         self.__dict__.update(kwargs)
 
         # Variables to store
@@ -220,7 +224,7 @@ class acme():
         """
         # Get randomized indices and calculate the number of batches
         indices = np.arange(self.n)
-        np.random.shuffle(indices)
+        np.random.shuffle(indices, random_state=self.random_state)
         num_batches = self.n // self.batch_size
 
         # Loop through the different batches and get the batches
@@ -485,7 +489,7 @@ class acme():
         val_accuracy = 0
 
         # NOTE: I removed the initial randomize and update differences
-        loop = tqdm(total=self.epochs*len(batches), position=0)
+        loop = tqdm(total=self.epochs * len(self.n // self.batch_size), position=0)
         for epoch in range(self.epochs):
 
             # reset the batches if re_randomize is true
@@ -581,7 +585,7 @@ class acme():
         if init_weights is not None:
             self.weights = init_weights
         else:
-            self.weights = .125*((np.random.random((self.d,self.d))*2 - 1) + np.eye(self.d))
+            self.weights = .125*((np.random.random((self.d, self.d))*2 - 1) + np.eye(self.d))
 
         # If there is a validation set, save it
         if X_val_set is not None and y_val_set is not None:
@@ -655,8 +659,7 @@ class acme():
 
         # TODO: Test this function
         # Get the predictions and return the accuracy
-        predictions = self.predict(X)
-        return accuracy_score(y, predictions)
+        return accuracy_score(y, self.predict(X))
     
 
     def cross_val_score(self, X:np.ndarray, y:np.ndarray, cv=5):
@@ -693,7 +696,7 @@ class acme():
             X (n,d) ndarray - The data to get the confusion matrix for
             y (n,) ndarray - The labels of the data
         Returns:
-            confusion_matrix (num_classes,num_classes) ndarray - The confusion matrix of the model
+            confusion_matrix (num_classes, num_classes) ndarray - The confusion matrix of the model
         """
         #TODO: Test this function
         # If the data is not provided, use the training data
@@ -871,11 +874,13 @@ class acme():
         # TODO: Test this function
         key_width = max(len(key) for key in self.__dict__.keys()) + 2
 
-        print("\n\nACME Model\n")
+        print("\n\nAdaptive Covariance Metric Estimator (ACME) Model\n")
         for key, value in self.__dict__.items():
             if isinstance(value, np.ndarray):
                 print(f"{key:<{key_width}} shape: {value.shape}")
             elif isinstance(value, list):
                 print(f"{key:<{key_width}} length: {len(value)}")
+            elif isinstance(value, dict):
+                print(f"{key:<{key_width}} keys: {list(value.keys())}")
             else:
                 print(f"{key:<{key_width}}: {value}")
