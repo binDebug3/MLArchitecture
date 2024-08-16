@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 # ml imports
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
+from sklearn.utils import shuffle
 
 # random forest
 from sklearn.ensemble import RandomForestClassifier
@@ -21,6 +22,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.neighbors import KNeighborsClassifier
 
 # metric imports
+from metric_learn import LMNN
 
 # our model imports
 sys.path.append('../')
@@ -42,19 +44,22 @@ possible_models = ["randomforest", "knn", "cnn", "ours", "metric"]
 
 ### HELPER FUNCTIONS ###
 
-def get_last_file(dir:str, partial_name:str):
+def get_last_file(dir:str, partial_name:str, insert:str="_d", file_type:str="npy"):
     """
     Get the last file in a directory matching the partial name
 
     Parameters:
     partial_name (str): partial name of the file
     dir (str): directory to search in
+    insert (str): string to insert before the datetime
+    file_type (str): type of file to search for
 
     Returns:
     str: path to the last file
     """
     # get all the datetimes
-    datetimes = [name.split("_")[-1].split(".")[0][1:] for name in os.listdir(dir) if partial_name in name]
+    shift = 0 if insert == "_" else 1
+    datetimes = [name.split("_")[-1].split(".")[0][shift:] for name in os.listdir(dir) if partial_name in name]
     
     # get the latest datetime by converting to datetime object
     vals = [dt.datetime.strptime(date, date_format) for date in datetimes]
@@ -63,7 +68,7 @@ def get_last_file(dir:str, partial_name:str):
     
     # get the latest datetime and return the path
     latest_datetime = max(vals).strftime(date_format)
-    return os.path.join(dir, f"{partial_name}_d{latest_datetime}.npy")
+    return os.path.join(dir, f"{partial_name}{insert}{latest_datetime}.{file_type}")
 
 
 
@@ -95,7 +100,8 @@ def build_name(val:bool, info_type:str, iteration):
 
 
 
-def load_data(dataset_name:str, model_name:str, info_type:str, iteration, val=False):
+def load_data(dataset_name:str, model_name:str, info_type:str, iteration:int, 
+              val:bool=False, verbose:bool=False):
     """
     Load the data from the most recent numpy file matching the partial name
     Parameters:
@@ -104,6 +110,7 @@ def load_data(dataset_name:str, model_name:str, info_type:str, iteration, val=Fa
         info_type (str): type of information
         iteration (int): iteration number
         val (bool): whether the data is validation data
+        verbose (bool): whether to print the error message
     Returns:
         np.ndarray: data from the numpy file or None if the file does not exist
     """
@@ -112,8 +119,9 @@ def load_data(dataset_name:str, model_name:str, info_type:str, iteration, val=Fa
     try:
         return np.load(get_last_file(dir, partial_name))
     except Exception as e:
-        print("Error: file not found")
-        print(stack_trace(e))
+        if verbose:
+            print("Error: file not found")
+            print(stack_trace(e))
         return None
     
 
@@ -129,7 +137,7 @@ def save_data(data:np.ndarray, save_constants:tuple, info_type:str, iteration,
             model_name (str): name of the model
             datetime (str): current date and time
         info_type (str): type of information
-        iteration (int): iteration number
+        iteration (int): the number of times this model config has been repeated
         val (bool): whether the data is validation data
         refresh (bool): whether to refresh the last file
     Returns: None
@@ -161,6 +169,28 @@ def save_data(data:np.ndarray, save_constants:tuple, info_type:str, iteration,
 ### MODEL FUNCTIONS ###
 
 
+def get_model(model_name:str, params:dict=None):
+    """
+    Returns a new instance of the model based on the model name.
+    Can be "randomforest", "knn", "acme", or "metric".
+
+    Parameters:
+        model_name (str): The name of the model to train.
+        params (dict): The hyperparameters to use for the acme model.
+    
+    Returns:
+        model: The model to train
+    """
+    mdl = RandomForestClassifier(n_jobs=-1) if model_name == "randomforest" else \
+            KNeighborsClassifier(n_jobs=-1) if model_name == "knn" else \
+            acme(param=params) if model_name == "acme" else \
+            LMNN(n_neighbors=5) if model_name == "metric" else None
+    if mdl is None:
+        raise ValueError("Invalid model name. Must be 'randomforest', 'knn', or 'acme'.")
+    return mdl
+
+
+
 def hyp_tun_acme(X_train:np.ndarray, y_train:np.ndarray, 
                  X_val:np.ndarray, y_val:np.ndarray,
                  params:dict=None):
@@ -176,7 +206,8 @@ def hyp_tun_acme(X_train:np.ndarray, y_train:np.ndarray,
         param_grid (dict): hyperparameters to tune
 
     Returns:
-        acme: model with the best hyperparameters
+        y_pred: predictions on the test set
+        y_pred_train: predictions on the training set
         dict: best hyperparameters
         float: average training time
     """
@@ -206,17 +237,80 @@ def hyp_tun_acme(X_train:np.ndarray, y_train:np.ndarray,
             best_acc = acc
             best_params = params
             best_model = clf.copy()
-    return best_model, best_params, np.mean(train_times)
+    y_pred = best_model.predict(X_val)
+    y_pred_train = clf.predict(X_train)
+    return y_pred, y_pred_train, best_params, np.mean(train_times)
 
 
 
-def benchmark_ml(model_name, experiment_info, datetime, params={},
-                save_all=True, save_any=True, refresh=True, tune_acme=True):
+def run_lmnn(x_train:np.ndarray, y_train:np.ndarray, x_test:np.ndarray):
+    """
+    Train the LMNN model and predict on the test set
+
+    Parameters:
+        x_train (np.ndarray): training data
+        y_train (np.ndarray): training labels
+        x_test (np.ndarray): testing data
+    
+    Returns:
+        np.ndarray: predictions on the test set
+        np.ndarray: predictions on the training set
+        float: average training time
+    """
+    # train and fit metric learning model
+    lmnn = LMNN(n_neighbors=4)
+    start_time = time.perf_counter()
+    lmnn.fit(x_train, y_train)
+    X_train_lmnn = lmnn.transform(x_train)
+    X_test_lmnn = lmnn.transform(x_test)
+
+    # train and fit knn predictor model
+    knn = KNeighborsClassifier(n_neighbors=4)
+    knn.fit(X_train_lmnn, y_train)
+    end_time = time.perf_counter()
+
+    y_pred = knn.predict(X_test_lmnn)
+    y_pred_train = knn.predict(X_train_lmnn)
+
+    return y_pred, y_pred_train, end_time - start_time
+
+
+
+def run_standard(model, x_train:np.ndarray, y_train:np.ndarray, x_test:np.ndarray):
+    """
+    Train a standard model and predict on the test set
+
+    Parameters:
+        model: model to train
+        x_train (np.ndarray): training data
+        y_train (np.ndarray): training labels
+        x_test (np.ndarray): testing data
+    
+    Returns:
+        np.ndarray: predictions on the test set
+        np.ndarray: predictions on the training set
+        float: average training time
+    """
+    start_time = time.perf_counter()
+    model.fit(x_train, y_train)
+    end_time = time.perf_counter()
+
+    y_pred = model.predict(x_test)
+    y_pred_train = model.predict(x_train)
+
+    return y_pred, y_pred_train, end_time - start_time
+
+
+
+def benchmark_ml(model_name:str, experiment_info, datetime, 
+                 params:dict={}, repeat:int=5, 
+                 save_all:bool=True, save_any:bool=True, 
+                 refresh:bool=True, tune_acme:bool=False):
     """
     Trains a model on the cancer dataset with different data sizes and saves the accuracy and time data.
 
     Parameters:
-        model_name (str): The name of the model to train. Can be "randomforest", "knn", or "ours".
+        model_name (str): The name of the model to train. Can be "randomforest", "knn", "acme", or "metric".
         experiment_info (tuple): Contains
             dataset_name (str): The name of the dataset to train on.
             dataset_sizes (list(int)): A list of the sizes of the dataset to train on.
@@ -226,6 +320,7 @@ def benchmark_ml(model_name, experiment_info, datetime, params={},
             y_test (np.ndarray): The testing labels.
         datetime (str): The current date and time.
         params (dict): The hyperparameters to use for the acme model.
+        repeat (int): The number of times to repeat the experiment.
         save_all (bool): Whether to save all the data or just the means and stds
         save_any (bool): Whether to save any data at all
         refresh (bool): Whether to refresh the last file
@@ -238,11 +333,6 @@ def benchmark_ml(model_name, experiment_info, datetime, params={},
         save_all = False
     # unpack experiment info
     dataset_name, data_sizes, X_train, y_train, X_test, y_test = experiment_info
-    model = RandomForestClassifier(n_jobs=-1) if model_name == "randomforest" else \
-            KNeighborsClassifier(n_jobs=-1) if model_name == "knn" else \
-            acme(param=params) if model_name == "acme" else None
-    if model is None:
-        raise ValueError("Invalid model name. Must be 'randomforest', 'knn', or 'acme'.")
     results_dict = {model_name: {}}
     save_constants = (dataset_name, model_name, datetime)
     
@@ -251,6 +341,9 @@ def benchmark_ml(model_name, experiment_info, datetime, params={},
         time_list = []
         train_acc = []
         val_acc = []
+        # X_train, y_train = shuffle(X_train, y_train, random_state=i)
+        # if len(np.unique(y_train)) < 2:
+        #     raise ValueError("Not enough classes in the training data")
 
         for size in data_sizes:
             if size is None or size > len(X_train):
@@ -258,19 +351,15 @@ def benchmark_ml(model_name, experiment_info, datetime, params={},
                 size = len(X_train)
             # train model
             if tune_acme:
-                clf, best_params, train_time = hyp_tun_acme(X_train[:size], y_train[:size], X_test, y_test)
-                model.set_params(**best_params)
+                y_pred, y_pred_train, params, train_time = hyp_tun_acme(X_train[:size], y_train[:size], X_test, y_test)
                 tune_acme = False
+            elif model_name == "metric":
+                y_pred, y_pred_train, train_time = run_lmnn(X_train[:size], y_train[:size], X_test)
             else:
-                clf = model
-                start_time = time.perf_counter()
-                clf.fit(X_train[:size], y_train[:size])
-                train_time = start_time - time.perf_counter()
-            y_pred = clf.predict(X_test)
+                model = get_model(model_name, params)
+                y_pred, y_pred_train, train_time = run_standard(model, X_train[:size], y_train[:size], X_test)
 
-            # predict and compute accuracy
-            y_pred_train = clf.predict(X_train[:size])
-            y_pred = clf.predict(X_test)
+            # Done training, now evaluating accuracy
             acc_train = accuracy_score(y_train[:size], y_pred_train)
             acc_test = accuracy_score(y_test, y_pred)
 
@@ -280,15 +369,15 @@ def benchmark_ml(model_name, experiment_info, datetime, params={},
             val_acc.append(acc_test)
             progressB.update(1)
 
-        # Done training, now saving data
+        # Done evaluating, now saving data
         train_acc = np.array(train_acc)
         val_acc = np.array(val_acc)
         time_list = np.array(time_list)
         if save_all:
-            for i, data, info_type in zip(range(info_length), 
+            for j, data, info_type in zip(range(info_length), 
                                           [train_acc, val_acc, time_list], 
                                           ["acc", "acc", "time"]):
-                save_data(data, save_constants, info_type, val=i==1, refresh=refresh)
+                save_data(data, save_constants, info_type, i, val=j==1, refresh=refresh)
         results_dict[model_name][i] = {"train_acc": train_acc, "val_acc": val_acc, "time": time_list}
     progressB.close()
 
@@ -356,7 +445,8 @@ def rebuild_results(benchmarking, all_data=False):
     return benchmarking
 
 
-def plot_results(benchmarking, constants, scale=5, save_fig=True, from_data=True):
+def plot_results(benchmarking, constants, scale=5, 
+                 save_fig=True, replace_fig=False, from_data=True):
     """
     Plot the benchmarking results
 
@@ -368,6 +458,7 @@ def plot_results(benchmarking, constants, scale=5, save_fig=True, from_data=True
             dataset_name (str): name of the dataset
         scale (int): scale of the figure
         save_fig (bool): whether to save the figure
+        replace_fig (bool): whether to replace the old figure
         from_data (bool): whether to load the data from the numpy files
     
     Returns:
@@ -396,6 +487,16 @@ def plot_results(benchmarking, constants, scale=5, save_fig=True, from_data=True
             plt.legend()
     plt.suptitle("Model Benchmarking")
     plt.tight_layout()
+
+    # save and show the figure
     if save_fig:
-        plt.savefig(f"results/{dataset_name}/charts/benchmarking_{datetime}.png")
+        fig_path = f"results/{dataset_name}/charts/"
+        fig_name = f"benchmarking_{datetime}.png"
+        if not os.path.exists(fig_path):
+            os.makedirs(fig_path)
+        if replace_fig:
+            replace_path = get_last_file(fig_path, "benchmarking", insert="_", file_type="png")
+            if replace_path is not None:
+                os.remove(replace_path)
+        plt.savefig(os.path.join(fig_path, fig_name))
     plt.show()
