@@ -196,7 +196,7 @@ def run_cnn(model, full_train_data, val_loader, test_loader, device, data_sizes,
             model.train()
             correct_train = 0
 
-            for data, label in train_loader:
+            for batch, (data, label) in enumerate(train_loader):
                 data, label = data.to(device), label.to(device)
                 optimizer.zero_grad()
                 output = model(data)
@@ -214,7 +214,7 @@ def run_cnn(model, full_train_data, val_loader, test_loader, device, data_sizes,
             model.eval()
             correct_val = 0
             with torch.no_grad():
-                for data, label in val_loader:
+                for batch, (data, label) in enumerate(val_loader):
                     data, label = data.to(device), label.to(device)
                     output = model(data)
                     pred = output.argmax(dim=1, keepdim=True)
