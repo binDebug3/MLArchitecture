@@ -152,7 +152,7 @@ def load_and_prepare_data(dataset_name, batch_size=64, val_split=0.1):
     val_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    return train_loader, val_loader, test_loader, input_channels
+    return train_subset, val_loader, test_loader, input_channels
 
 
 def run_cnn(model, full_train_data, val_loader, test_loader, device, data_sizes, epochs=10):
