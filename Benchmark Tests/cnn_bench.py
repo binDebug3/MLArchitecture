@@ -16,6 +16,7 @@ import datetime as dt
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
+import torch.optim as optim
 import matplotlib.pyplot as plt
 
 def get_model(model_name:str, params:dict=None):
@@ -162,84 +163,90 @@ def load_and_prepare_data(dataset_name, batch_size=64, val_split=0.1):
 
     return train_subset, val_loader, test_loader, input_channels
 
-
-def run_cnn(model, full_train_data, val_loader, test_loader, device, data_sizes, epochs=10):
+def run_cnn(model, train_loader, val_loader, test_loader, device, data_sizes, epochs=10, repeat=5):
     """
-    Train the CNN model and track training and validation accuracy and training time over different data sizes.
+    Train the CNN model and predict using provided test set using Pytorch.
 
     Parameters:
-        model: PyTorch model to train
-        full_train_data: Full training dataset
-        val_loader: Validation data loader
-        test_loader: Test data loader
-        device: Device to run the model on (CPU or GPU)
-        data_sizes: List of different data sizes to train on
-        epochs: Number of epochs to train the model
-    
+        model: Pytorch model to train.
+        train_loader: Training data loader.
+        val_loader: Validation data loader.
+        test_loader: Test data loader.
+        device: Device to run the model on (e.g., 'cuda' or 'cpu').
+        data_sizes: List of data sizes to iterate over.
+        epochs: Number of epochs to train the model.
+        repeat: Number of times to repeat the experiment for std calculation.
+
     Returns:
-        dict: A dictionary containing training accuracy, validation accuracy, and training time for each data size
+        dict: A dictionary containing mean and std of train accuracy, validation accuracy, and training time.
     """
     results = {
         'train_acc': [],
         'val_acc': [],
-        'train_time': [],
-        'data_sizes': data_sizes
+        'train_time': []
     }
 
     for size in data_sizes:
-        # Create a subset of the training data
-        subset_indices = list(range(size))
-        train_subset = torch.utils.data.Subset(full_train_data, subset_indices)
-        train_loader = torch.utils.data.DataLoader(train_subset, batch_size=64, shuffle=True)
+        train_accs = []
+        val_accs = []
+        times = []
 
-        # Reinitialize the model for each data size to start fresh
-        model.apply(lambda m: m.reset_parameters() if hasattr(m, 'reset_parameters') else None)
-        model.to(device)
-        optimizer = optim.Adam(model.parameters())
-        criterion = nn.CrossEntropyLoss()
+        for r in range(repeat):
+            # Reinitialize the model for each repeat
+            model.apply(lambda m: m.reset_parameters() if hasattr(m, 'reset_parameters') else None)
+            model.to(device)
+            optimizer = optim.Adam(model.parameters())
+            criterion = nn.CrossEntropyLoss()
 
-        start_time = time.perf_counter()
+            start_time = time.perf_counter()
 
-        for epoch in range(epochs):
-            model.train()
-            correct_train = 0
+            for epoch in range(epochs):
+                model.train()
+                correct_train = 0
 
-            for batch, (data, label) in enumerate(train_loader):
-                data, label = data.to(device), label.to(device)
-                optimizer.zero_grad()
-                output = model(data)
-
-                loss = criterion(output, label)
-                loss.backward()
-                optimizer.step()
-
-                pred = output.argmax(dim=1, keepdim=True)
-                correct_train += pred.eq(label.view_as(pred)).sum().item()
-
-            train_accuracy = correct_train / len(train_loader.dataset)
-
-            # Evaluate on validation set
-            model.eval()
-            correct_val = 0
-            with torch.no_grad():
-                for batch, (data, label) in enumerate(val_loader):
+                for batch, (data, label) in enumerate(train_loader):
                     data, label = data.to(device), label.to(device)
+                    optimizer.zero_grad()
                     output = model(data)
+
+                    loss = criterion(output, label)
+                    loss.backward()
+                    optimizer.step()
+
                     pred = output.argmax(dim=1, keepdim=True)
-                    correct_val += pred.eq(label.view_as(pred)).sum().item()
+                    correct_train += pred.eq(label.view_as(pred)).sum().item()
 
-            val_accuracy = correct_val / len(val_loader.dataset)
-            print(f'Data Size: {size}, Epoch {epoch + 1}/{epochs}, Train Accuracy: {train_accuracy:.4f}, Val Accuracy: {val_accuracy:.4f}')
+                train_accuracy = correct_train / len(train_loader.dataset)
 
-        end_time = time.perf_counter()
-        training_time = end_time - start_time
+                # Evaluate on validation set
+                model.eval()
+                correct_val = 0
+                with torch.no_grad():
+                    for batch, (data, label) in enumerate(val_loader):
+                        data, label = data.to(device), label.to(device)
+                        output = model(data)
+                        pred = output.argmax(dim=1, keepdim=True)
+                        correct_val += pred.eq(label.view_as(pred)).sum().item()
 
-        # Store the results
-        results['train_acc'].append(train_accuracy)
-        results['val_acc'].append(val_accuracy)
-        results['train_time'].append(training_time)
+                val_accuracy = correct_val / len(val_loader.dataset)
+                print(f'Data Size: {size}, Repeat {r + 1}/{repeat}, Epoch {epoch + 1}/{epochs}, '
+                      f'Train Accuracy: {train_accuracy:.4f}, Val Accuracy: {val_accuracy:.4f}')
+
+            end_time = time.perf_counter()
+            training_time = end_time - start_time
+
+            # Store results of each repeat
+            train_accs.append(train_accuracy)
+            val_accs.append(val_accuracy)
+            times.append(training_time)
+
+        # Calculate mean and std for this data size
+        results['train_acc'].append((np.mean(train_accs), np.std(train_accs)))
+        results['val_acc'].append((np.mean(val_accs), np.std(val_accs)))
+        results['train_time'].append((np.mean(times), np.std(times)))
 
     return results
+
 
 def save_cnn_data(data: np.ndarray, dataset_name: str, model_name: str, info_type: str, iteration: int, datetime: str, val: bool=False):
     """
