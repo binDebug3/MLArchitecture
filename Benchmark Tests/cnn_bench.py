@@ -16,7 +16,6 @@ import datetime as dt
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-import torch.optim as optim
 import matplotlib.pyplot as plt
 
 def get_model(model_name:str, params:dict=None):
@@ -55,19 +54,9 @@ class CNNModel(nn.Module):
 
     def forward(self, x):
         x = torch.relu(self.conv1(x))
-        # Check if the dimensions are large enough for pooling
-        if x.ndimension() == 4 and x.shape[2] > 2 and x.shape[3] > 2:
-            x = self.pool(torch.relu(self.conv2(x)))
-        else:
-            x = torch.relu(self.conv2(x)) 
+        x = self.pool(torch.relu(self.conv2(x))) if x.shape[2] > 2 and x.shape[3] > 2 else torch.relu(self.conv2(x))
         
-        # Check if x has the expected dimensions before flattening
-        if x.ndimension() == 4:
-            # Safely flatten the tensor while considering the batch size
-            x = x.view(x.size(0), -1)  # x.size(0) is the batch size
-        else:
-            raise ValueError(f"Unexpected tensor dimensions: {x.shape}")
-
+        x = x.view(-1, x.size(1) * x.size(2) * x.size(3))
         x = torch.relu(self.linear1(x))
         x = self.dropout(x)
         x = self.linear2(x)
@@ -173,36 +162,47 @@ def load_and_prepare_data(dataset_name, batch_size=64, val_split=0.1):
 
     return train_subset, val_loader, test_loader, input_channels
 
-def run_cnn(model, train_loader, val_loader, test_loader, device, data_sizes, epochs=10, repeat=5):
+
+import torch.optim as optim
+import numpy as np
+import time
+
+def run_cnn(model, full_train_data, val_loader, test_loader, device, data_sizes, epochs=10, repeat=5):
     """
-    Train the CNN model and predict using provided test set using Pytorch.
+    Train the CNN model and track training and validation accuracy and training time over different data sizes.
 
     Parameters:
-        model: Pytorch model to train.
-        train_loader: Training data loader.
-        val_loader: Validation data loader.
-        test_loader: Test data loader.
-        device: Device to run the model on (e.g., 'cuda' or 'cpu').
-        data_sizes: List of data sizes to iterate over.
-        epochs: Number of epochs to train the model.
-        repeat: Number of times to repeat the experiment for std calculation.
-
+        model_class: The class of the model (e.g., CNNModel)
+        full_train_data: Full training dataset
+        val_loader: Validation data loader
+        test_loader: Test data loader
+        device: Device to run the model on (CPU or GPU)
+        data_sizes: List of different data sizes to train on
+        epochs: Number of epochs to train the model
+        repeat: Number of times to repeat the experiment for std calculation
+    
     Returns:
-        dict: A dictionary containing mean and std of train accuracy, validation accuracy, and training time.
+        dict: A dictionary containing mean and std of training accuracy, validation accuracy, and training time for each data size
     """
-    results = {
-        'train_acc': [],
-        'val_acc': [],
-        'train_time': []
-    }
+    results_dict = {"cnn" : {}}
 
-    for size in data_sizes:
-        train_accs = []
-        val_accs = []
-        times = []
+    train_accs = []
+    val_accs = []
+    times = []
 
-        for r in range(repeat):
-            # Reinitialize the model for each repeat
+    progressB = tqdm(total=repeat*len(data_sizes), desc=f"Benchmarking CNN")
+    for i in range(repeat):
+        train_acc_list = []
+        val_acc_list = []
+        time_list = []
+
+        for size in data_sizes:
+            # Create a subset of the training data
+            subset_indices = list(range(size))
+            train_subset = torch.utils.data.Subset(full_train_data, subset_indices)
+            train_loader = torch.utils.data.DataLoader(train_subset, batch_size=64, shuffle=True)
+
+            # Reinitialize the model for each repetition and data size
             model.apply(lambda m: m.reset_parameters() if hasattr(m, 'reset_parameters') else None)
             model.to(device)
             optimizer = optim.Adam(model.parameters())
@@ -239,23 +239,37 @@ def run_cnn(model, train_loader, val_loader, test_loader, device, data_sizes, ep
                         correct_val += pred.eq(label.view_as(pred)).sum().item()
 
                 val_accuracy = correct_val / len(val_loader.dataset)
-                print(f'Data Size: {size}, Repeat {r + 1}/{repeat}, Epoch {epoch + 1}/{epochs}, '
-                      f'Train Accuracy: {train_accuracy:.4f}, Val Accuracy: {val_accuracy:.4f}')
 
             end_time = time.perf_counter()
             training_time = end_time - start_time
 
-            # Store results of each repeat
-            train_accs.append(train_accuracy)
-            val_accs.append(val_accuracy)
-            times.append(training_time)
+            # Store results for this size
+            time_list.append(training_time)
+            train_acc_list.append(train_accuracy)
+            val_acc_list.append(val_accuracy)
+            progressB.update(1)
+            
+        # Store the results of this repetition
+        train_accs.append(np.array(train_acc_list))
+        val_accs.append(np.array(val_acc_list))
+        times.append(np.array(time_list))
+        
 
-        # Calculate mean and std for this data size
-        results['train_acc'].append((np.mean(train_accs), np.std(train_accs)))
-        results['val_acc'].append((np.mean(val_accs), np.std(val_accs)))
-        results['train_time'].append((np.mean(times), np.std(times)))
 
-    return results
+    progressB.close()
+    # Calculate mean and std across all repetitions
+    train_acc_mean = np.mean(train_accs, axis=0)
+    val_acc_mean = np.mean(val_accs, axis=0)
+    time_mean = np.mean(times, axis=0)
+
+    train_acc_std = np.std(train_accs, axis=0)
+    val_acc_std = np.std(val_accs, axis=0)
+    time_std = np.std(times, axis=0)
+
+    results_dict['cnn']["mean"] = {"train_acc": train_acc_mean, "val_acc": val_acc_mean, "time": time_mean}
+    results_dict['cnn']["std"] = {"train_acc": train_acc_std, "val_acc": val_acc_std, "time": time_std}
+
+    return results_dict
 
 
 def save_cnn_data(data: np.ndarray, dataset_name: str, model_name: str, info_type: str, iteration: int, datetime: str, val: bool=False):
