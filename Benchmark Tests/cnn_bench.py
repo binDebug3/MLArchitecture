@@ -2,9 +2,11 @@
 import torch
 from torch import nn
 from torchvision import transforms, datasets
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, random_split, TensorDataset
 import torch.optim as optim
 from torchvision.transforms import ToTensor
+from sklearn.datasets import load_digits
+from sklearn.model_selection import train_test_split
 
 #benchmarking imports
 import sys
@@ -74,9 +76,39 @@ def load_and_prepare_data(dataset_name, batch_size=64, val_split=0.1):
             transforms.ToTensor(),
             transforms.Normalize((0.1307,), (0.3081,))
         ])
-        train_dataset = datasets.MNIST('./', train=True, download=True, transform=transform)
-        test_dataset = datasets.MNIST('./', train=False, transform=transform)
+        #digits dataset
+        digits = load_digits()
+        X, y = digits['data'], digits['target']
+
+        # Convert the data to float32 and the labels to int64
+        X = X.astype('float32')
+        y = y.astype('int64')
+
+        # Normalize the pixel values to the range [0, 1]
+        X /= 16.0  # Since the pixel values in load_digits range from 0 to 16
+
+        # Reshape the data to match PyTorch's expectations (N, C, H, W)
+        X = X.reshape(-1, 1, 8, 8)
         input_channels = 1
+
+        # First, split into train and test sets (80% train, 20% test)
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+        # Then, split the training set further into train and validation sets (90% train, 10% validation)
+        X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=val_split, random_state=42)
+
+        # Convert to PyTorch tensors
+        X_train = torch.tensor(X_train)
+        y_train = torch.tensor(y_train)
+        X_val = torch.tensor(X_val)
+        y_val = torch.tensor(y_val)
+        X_test = torch.tensor(X_test)
+        y_test = torch.tensor(y_test)
+
+        # Create TensorDataset and DataLoader for MNIST
+        train_subset = TensorDataset(X_train, y_train)
+        val_subset = TensorDataset(X_val, y_val)
+        test_dataset = TensorDataset(X_test, y_test)
 
     elif dataset_name == 'fashion-mnist':
         transform = transforms.Compose([
@@ -87,6 +119,13 @@ def load_and_prepare_data(dataset_name, batch_size=64, val_split=0.1):
         test_dataset = datasets.FashionMNIST('./', train=False, transform=transform)
         input_channels = 1
 
+        # Calculate the number of samples for validation and training
+        val_size = int(val_split * len(train_dataset))
+        train_size = len(train_dataset) - val_size
+
+        # Split the training dataset into training and validation sets
+        train_subset, val_subset = random_split(train_dataset, [train_size, val_size])
+
     elif dataset_name == 'cifar10':
         transform = transforms.Compose([
             transforms.ToTensor(),
@@ -96,15 +135,17 @@ def load_and_prepare_data(dataset_name, batch_size=64, val_split=0.1):
         test_dataset = datasets.CIFAR10('./', train=False, transform=transform)
         input_channels = 3
 
+        # Calculate the number of samples for validation and training
+        val_size = int(val_split * len(train_dataset))
+        train_size = len(train_dataset) - val_size
+
+        # Split the training dataset into training and validation sets
+        train_subset, val_subset = random_split(train_dataset, [train_size, val_size])
+
     else:
         raise ValueError("Dataset not supported: choose 'mnist', 'fashion-mnist', or 'cifar10'.")
 
-    # Calculate the number of samples for validation and training
-    val_size = int(val_split * len(train_dataset))
-    train_size = len(train_dataset) - val_size
-
-    # Split the training dataset into training and validation sets
-    train_subset, val_subset = random_split(train_dataset, [train_size, val_size])
+    
 
     # Create DataLoaders for each set
     train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True)
