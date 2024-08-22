@@ -74,8 +74,8 @@ def load_and_prepare_data(dataset_name, batch_size=64, val_split=0.1):
             transforms.ToTensor(),
             transforms.Normalize((0.1307,), (0.3081,))
         ])
-        train_dataset = datasets.MNIST('.', train=True, download=True, transform=transform)
-        test_dataset = datasets.MNIST('.', train=False, transform=transform)
+        train_dataset = datasets.MNIST('./', train=True, download=True, transform=transform)
+        test_dataset = datasets.MNIST('./', train=False, transform=transform)
         input_channels = 1
 
     elif dataset_name == 'fashion-mnist':
@@ -83,8 +83,8 @@ def load_and_prepare_data(dataset_name, batch_size=64, val_split=0.1):
             transforms.ToTensor(),
             transforms.Normalize((0.1307,), (0.3081,))
         ])
-        train_dataset = datasets.FashionMNIST('.', train=True, download=True, transform=transform)
-        test_dataset = datasets.FashionMNIST('.', train=False, transform=transform)
+        train_dataset = datasets.FashionMNIST('./', train=True, download=True, transform=transform)
+        test_dataset = datasets.FashionMNIST('./', train=False, transform=transform)
         input_channels = 1
 
     elif dataset_name == 'cifar10':
@@ -92,8 +92,8 @@ def load_and_prepare_data(dataset_name, batch_size=64, val_split=0.1):
             transforms.ToTensor(),
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616))
         ])
-        train_dataset = datasets.CIFAR10('.', train=True, download=True, transform=transform)
-        test_dataset = datasets.CIFAR10('.', train=False, transform=transform)
+        train_dataset = datasets.CIFAR10('./', train=True, download=True, transform=transform)
+        test_dataset = datasets.CIFAR10('./', train=False, transform=transform)
         input_channels = 3
 
     else:
