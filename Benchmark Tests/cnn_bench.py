@@ -41,8 +41,11 @@ class CNNModel(nn.Module):
         self.conv1 = nn.Conv2d(input_channels, 32, kernel_size=3)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3)
         
-        # Calculate the size after convolution and pooling to adjust the linear layer
-        conv_output_size = (input_size - 4) // 2  # After two conv layers and one pooling layer
+        # Dynamically calculate the size after convolution and pooling
+        conv_output_size = (input_size - 4) // 2
+        if conv_output_size < 2:
+            conv_output_size = (input_size - 4)
+
         self.pool = nn.MaxPool2d(2, 2)
         
         self.linear1 = nn.Linear(64 * conv_output_size * conv_output_size, 128)
