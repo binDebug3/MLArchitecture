@@ -53,9 +53,10 @@ class CNNModel(nn.Module):
         self.linear2 = nn.Linear(128, 10)
 
     def forward(self, x):
-        x = self.pool(torch.relu(self.conv1(x)))
-        x = self.pool(torch.relu(self.conv2(x)))
-        x = x.view(-1, 64 * 5 * 5 if x.shape[1] == 1 else 64 * 6 * 6)
+        x = torch.relu(self.conv1(x))
+        x = self.pool(torch.relu(self.conv2(x))) if x.shape[2] > 2 and x.shape[3] > 2 else torch.relu(self.conv2(x))
+        
+        x = x.view(-1, x.size(1) * x.size(2) * x.size(3))
         x = torch.relu(self.linear1(x))
         x = self.dropout(x)
         x = self.linear2(x)
