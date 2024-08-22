@@ -36,12 +36,16 @@ def get_model(model_name:str, params:dict=None):
 
 #define a CNN 
 class CNNModel(nn.Module):
-    def __init__(self, input_channels):
+    def __init__(self, input_channels, input_size=28):
         super(CNNModel, self).__init__()
         self.conv1 = nn.Conv2d(input_channels, 32, kernel_size=3)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3)
+        
+        # Calculate the size after convolution and pooling to adjust the linear layer
+        conv_output_size = (input_size - 4) // 2  # After two conv layers and one pooling layer
         self.pool = nn.MaxPool2d(2, 2)
-        self.linear1 = nn.Linear(64 * 5 * 5, 128) if input_channels == 1 else nn.Linear(64 * 6 * 6, 128)
+        
+        self.linear1 = nn.Linear(64 * conv_output_size * conv_output_size, 128)
         self.dropout = nn.Dropout(0.5)
         self.linear2 = nn.Linear(128, 10)
 
