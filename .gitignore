@@ -1,0 +1,8 @@
+*.csv
+"Benchmark Tests/data/"
+Benchmark\ Tests/data/
+*_i[0-9]_d2*/*.npy
+"__pycache__/"
+__pycache__/
+"Benchmark Tests/.ipynb_checkpoints/"
+Benchmark\ Tests/.ipynb_checkpoints/

@@ -34,6 +34,7 @@ from model import acme
 
 benchmarking = {}
 repeat = 5
+lmnn_default_neighbors = 3
 info_length = 3     # train_acc, test_acc, time
 date_format = "%y%m%d@%H%M"
 possible_models = ["randomforest", "knn", "cnn", "ours", "metric"]
@@ -184,7 +185,7 @@ def get_model(model_name:str, params:dict=None):
     mdl = RandomForestClassifier(n_jobs=-1) if model_name == "randomforest" else \
             KNeighborsClassifier(n_jobs=-1) if model_name == "knn" else \
             acme(param=params) if model_name == "acme" else \
-            LMNN(n_neighbors=5) if model_name == "metric" else None
+            LMNN(n_neighbors=lmnn_default_neighbors) if model_name == "metric" else None
     if mdl is None:
         raise ValueError("Invalid model name. Must be 'randomforest', 'knn', or 'acme'.")
     return mdl
@@ -258,14 +259,14 @@ def run_lmnn(x_train:np.ndarray, y_train:np.ndarray, x_test:np.ndarray):
         float: average training time
     """
     # train and fit metric learning model
-    lmnn = LMNN(n_neighbors=4)
+    lmnn = LMNN(n_neighbors=lmnn_default_neighbors)
     start_time = time.perf_counter()
     lmnn.fit(x_train, y_train)
     X_train_lmnn = lmnn.transform(x_train)
     X_test_lmnn = lmnn.transform(x_test)
 
     # train and fit knn predictor model
-    knn = KNeighborsClassifier(n_neighbors=4)
+    knn = KNeighborsClassifier(n_neighbors=lmnn_default_neighbors, n_jobs=-1)
     knn.fit(X_train_lmnn, y_train)
     end_time = time.perf_counter()
 
