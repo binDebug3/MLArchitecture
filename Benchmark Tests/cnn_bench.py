@@ -55,7 +55,11 @@ class CNNModel(nn.Module):
 
     def forward(self, x):
         x = torch.relu(self.conv1(x))
-        x = self.pool(torch.relu(self.conv2(x))) if x.shape[2] > 2 and x.shape[3] > 2 else torch.relu(self.conv2(x))
+        # Check if the dimensions are large enough for pooling
+        if x.ndimension() == 4 and x.shape[2] > 2 and x.shape[3] > 2:
+            x = self.pool(torch.relu(self.conv2(x)))
+        else:
+        x = torch.relu(self.conv2(x)) 
         
         x = x.view(-1, x.size(1) * x.size(2) * x.size(3))
         x = torch.relu(self.linear1(x))
