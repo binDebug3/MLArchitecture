@@ -192,8 +192,29 @@ def run_cnn(model, full_train_data, val_loader, test_loader, device, data_sizes,
 
     return results
 
+def save_cnn_data(data: np.ndarray, dataset_name: str, model_name: str, info_type: str, iteration: int, datetime: str, val: bool=False):
+    """
+    Save the CNN results to a numpy file.
 
-import matplotlib.pyplot as plt
+    Parameters:
+        data (np.ndarray): Data to save.
+        dataset_name (str): Name of the dataset.
+        model_name (str): Name of the model (e.g., "cnn").
+        info_type (str): Type of information (e.g., "acc", "time").
+        iteration (int): The number of times this model configuration has been repeated.
+        datetime (str): Current date and time.
+        val (bool): Whether the data is validation data.
+    """
+    dir = f"results/{dataset_name}/{model_name}/npy_files"
+    if not os.path.exists(dir):
+        os.makedirs(dir)
+    
+    train_val = "train" if not val else "val"
+    filename = f"{train_val}_{info_type}_i{iteration}_d{datetime}.npy"
+    path = os.path.join(dir, filename)
+    
+    np.save(path, data)
+    print(f"Data saved to {path}")
 
 def plot_results(results):
     """
