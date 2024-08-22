@@ -191,3 +191,55 @@ def run_cnn(model, full_train_data, val_loader, test_loader, device, data_sizes,
         results['train_time'].append(training_time)
 
     return results
+
+
+import matplotlib.pyplot as plt
+
+def plot_results(results):
+    """
+    Plot the benchmarking results, including training accuracy, validation accuracy, and training time over different data sizes.
+
+    Parameters:
+        results (dict): A dictionary containing the training accuracy, validation accuracy, and training time for each data size.
+    """
+
+    data_sizes = results['data_sizes']
+    train_acc = results['train_acc']
+    val_acc = results['val_acc']
+    train_time = results['train_time']
+
+    plt.figure(figsize=(18, 6))
+
+    # Training Accuracy Plot
+    plt.subplot(1, 3, 1)
+    plt.plot(data_sizes, train_acc, label='Train Accuracy', marker='o', color='tab:green')
+    plt.xlabel('Data Size')
+    plt.ylabel('Accuracy (%)')
+    plt.title('train_acc')
+    plt.ylim(0.7, 1.02)
+    plt.axhline(y=1, color='k', linestyle='--')
+    plt.legend()
+
+    # Validation Accuracy Plot
+    plt.subplot(1, 3, 2)
+    plt.plot(data_sizes, val_acc, label='Val Accuracy', marker='o', color='tab:orange')
+    plt.xlabel('Data Size')
+    plt.ylabel('Accuracy (%)')
+    plt.title('val_acc')
+    plt.ylim(0.7, 1.02)
+    plt.axhline(y=1, color='k', linestyle='--')
+    plt.legend()
+
+    # Training Time Plot
+    plt.subplot(1, 3, 3)
+    plt.plot(data_sizes, train_time, label='Training Time', marker='o', color='tab:red')
+    plt.xlabel('Data Size')
+    plt.ylabel('Training Time (s)')
+    plt.title('time')
+    plt.yscale('log')  # Logarithmic scale for training time
+    plt.legend()
+
+    plt.suptitle('Model Benchmarking')
+    plt.tight_layout()
+    plt.show()
+
