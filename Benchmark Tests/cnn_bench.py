@@ -61,7 +61,13 @@ class CNNModel(nn.Module):
         else:
             x = torch.relu(self.conv2(x)) 
         
-        x = x.view(-1, x.size(1) * x.size(2) * x.size(3))
+        # Check if x has the expected dimensions before flattening
+        if x.ndimension() == 4:
+            # Safely flatten the tensor while considering the batch size
+            x = x.view(x.size(0), -1)  # x.size(0) is the batch size
+        else:
+            raise ValueError(f"Unexpected tensor dimensions: {x.shape}")
+
         x = torch.relu(self.linear1(x))
         x = self.dropout(x)
         x = self.linear2(x)
